@@ -5,17 +5,20 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller
@@ -39,7 +42,7 @@ jobs:
           Write-Output "Size: $([math]::Round($zip.Length / 1MB, 2)) MB"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/OpenListDownloader-${{ github.ref_name }}.zip
           generate_release_notes: true
