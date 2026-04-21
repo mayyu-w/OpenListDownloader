@@ -11,6 +11,7 @@ from gui.styles import DEFAULT_SERVER_URL
 
 class LoginWidget(QWidget):
     login_requested = pyqtSignal(str, str, str)
+    disconnect_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,14 +39,20 @@ class LoginWidget(QWidget):
         self.load_btn.setFixedWidth(90)
         self.load_btn.clicked.connect(self._on_load_config)
 
-
         self.login_btn = QPushButton("连接")
         self.login_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.login_btn.clicked.connect(self._on_login)
 
+        self.disconnect_btn = QPushButton("断开连接")
+        self.disconnect_btn.setObjectName("dangerBtn")
+        self.disconnect_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.disconnect_btn.clicked.connect(self.disconnect_requested.emit)
+        self.disconnect_btn.setVisible(False)
+
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.load_btn)
         btn_row.addWidget(self.login_btn)
+        btn_row.addWidget(self.disconnect_btn)
         layout.addRow(btn_row)
 
         self.status_label = QLabel("")
@@ -85,6 +92,7 @@ class LoginWidget(QWidget):
             self.username_input.setEnabled(False)
             self.password_input.setEnabled(False)
             self.load_btn.setEnabled(False)
+            self.disconnect_btn.setVisible(True)
         else:
             self.status_label.setObjectName("statusErr")
             self.status_label.setStyleSheet("color: #c62828;")
@@ -95,6 +103,7 @@ class LoginWidget(QWidget):
             self.username_input.setEnabled(True)
             self.password_input.setEnabled(True)
             self.load_btn.setEnabled(True)
+            self.disconnect_btn.setVisible(False)
 
     def get_credentials(self) -> tuple:
         return (

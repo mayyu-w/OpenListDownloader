@@ -81,6 +81,8 @@ class Aria2Worker(QThread):
 
 class Aria2Widget(QWidget):
     config_loaded = pyqtSignal()
+    running_changed = pyqtSignal(bool)
+    stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -181,7 +183,7 @@ class Aria2Widget(QWidget):
         if self._worker:
             return
         if self._running:
-            self._do_stop()
+            self.stop_requested.emit()
         else:
             self._do_start()
 
@@ -221,6 +223,7 @@ class Aria2Widget(QWidget):
             self._running = True
             self._update_ui(True, msg)
             self._save_config()
+            self.running_changed.emit(True)
         else:
             self._set_status(False, msg)
             self.action_btn.setEnabled(True)
@@ -231,6 +234,7 @@ class Aria2Widget(QWidget):
         self._worker = None
         self._running = False
         self._update_ui(False, msg)
+        self.running_changed.emit(False)
 
     def _save_config(self):
         from utils.config_manager import save_config

@@ -68,6 +68,28 @@ class Aria2RPC:
             gids.append(gid)
         return gids
 
+    def get_download_status(self, gid: str) -> dict:
+        keys = [
+            "gid", "status", "totalLength", "completedLength",
+            "downloadSpeed", "errorCode", "errorMessage", "files",
+        ]
+        result = self._call("aria2.tellStatus", [gid, keys])
+        status = result.get("status", "unknown")
+        total = int(result.get("totalLength", 0))
+        completed = int(result.get("completedLength", 0))
+        speed = int(result.get("downloadSpeed", 0))
+        progress = int(completed / total * 100) if total > 0 else 0
+        return {
+            "gid": gid,
+            "status": status,
+            "total_length": total,
+            "completed_length": completed,
+            "speed": speed,
+            "progress": progress,
+            "error_code": result.get("errorCode", ""),
+            "error_message": result.get("errorMessage", ""),
+        }
+
     @staticmethod
     def check_aria2_binary(aria2_path: str) -> tuple:
         if not aria2_path:

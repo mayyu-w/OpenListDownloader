@@ -13,6 +13,8 @@ from utils.format import format_file_size
 class FileListWidget(QWidget):
     selection_changed = pyqtSignal(int)
     download_requested = pyqtSignal()
+    open_download_dir_requested = pyqtSignal()
+    clear_finished_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +38,18 @@ class FileListWidget(QWidget):
         self.download_btn.setObjectName("primaryBtn")
         self.download_btn.clicked.connect(self.download_requested.emit)
         toolbar.addWidget(self.download_btn)
+
+        self.open_dir_btn = QPushButton("打开目录")
+        self.open_dir_btn.setEnabled(False)
+        self.open_dir_btn.setObjectName("toolBtn")
+        self.open_dir_btn.clicked.connect(self.open_download_dir_requested.emit)
+        toolbar.addWidget(self.open_dir_btn)
+
+        self.clear_finished_btn = QPushButton("清空已完成")
+        self.clear_finished_btn.setEnabled(False)
+        self.clear_finished_btn.setObjectName("toolBtn")
+        self.clear_finished_btn.clicked.connect(self.clear_finished_requested.emit)
+        toolbar.addWidget(self.clear_finished_btn)
 
         toolbar.addSpacerItem(QSpacerItem(12, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
 

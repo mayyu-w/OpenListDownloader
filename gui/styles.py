@@ -136,6 +136,24 @@ QPushButton#primaryBtn:disabled {
     color: #e8edf2;
 }
 
+QPushButton#dangerBtn {
+    padding: 5px 14px;
+    font-size: 12px;
+    background: #fef0f0;
+    color: #f56c6c;
+    border: 1px solid #fbc4c4;
+    font-weight: bold;
+}
+QPushButton#dangerBtn:hover {
+    background: #f56c6c;
+    color: #ffffff;
+    border-color: #f56c6c;
+}
+QPushButton#dangerBtn:pressed {
+    background: #e04040;
+    color: #ffffff;
+}
+
 QTableWidget {
     background: #ffffff;
     alternate-background-color: #f0f4f8;
@@ -266,7 +284,7 @@ QMessageBox QPushButton {
 }
 """
 
-DEFAULT_SERVER_URL = "http://10.49.1.35:5255"
-DEFAULT_RPC_URL = "http://10.49.1.122:6800/jsonrpc"
-DEFAULT_RPC_SECRET = "123456"
-DEFAULT_SAVE_DIR = r"C:\Users\Administrator\Downloads"
+DEFAULT_SERVER_URL = "http://host:port"
+DEFAULT_RPC_URL = "http://host:6800/jsonrpc"
+DEFAULT_RPC_SECRET = ""
+DEFAULT_SAVE_DIR = ""
