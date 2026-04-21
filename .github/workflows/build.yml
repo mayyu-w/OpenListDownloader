@@ -1,0 +1,45 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller OpenListDownloader.spec
+
+      - name: Clean up dist
+        run: |
+          Get-ChildItem -Path dist\OpenListDownloader -Recurse -Include *.pdb | Remove-Item -Force
+          Get-ChildItem -Path dist\OpenListDownloader -Recurse -Include *.lib | Remove-Item -Force
+
+      - name: Create zip
+        run: |
+          Compress-Archive -Path dist\OpenListDownloader -DestinationPath dist\OpenListDownloader-${{ github.ref_name }}.zip
+
+      - name: Show package info
+        run: |
+          $zip = Get-Item dist\OpenListDownloader-${{ github.ref_name }}.zip
+          Write-Output "Package: $($zip.Name)"
+          Write-Output "Size: $([math]::Round($zip.Length / 1MB, 2)) MB"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/OpenListDownloader-${{ github.ref_name }}.zip
+          generate_release_notes: true
