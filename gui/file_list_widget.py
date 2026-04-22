@@ -2,7 +2,8 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QCheckBox, QGroupBox, QPushButton, QLabel, QSpacerItem, QSizePolicy,
+    QHeaderView, QCheckBox, QGroupBox, QPushButton, QLabel, QLineEdit,
+    QSpacerItem, QSizePolicy,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 
@@ -20,6 +21,7 @@ class FileListWidget(QWidget):
         super().__init__(parent)
         self._files: list = []
         self._checkboxes: list = []
+        self._total_scanned: int = 0
         self._setup_ui()
 
     def _setup_ui(self):
@@ -39,19 +41,6 @@ class FileListWidget(QWidget):
         self.download_btn.clicked.connect(self.download_requested.emit)
         toolbar.addWidget(self.download_btn)
 
-        self.open_dir_btn = QPushButton("打开目录")
-        self.open_dir_btn.setEnabled(False)
-        self.open_dir_btn.setObjectName("toolBtn")
-        self.open_dir_btn.clicked.connect(self.open_download_dir_requested.emit)
-        toolbar.addWidget(self.open_dir_btn)
-
-        self.clear_finished_btn = QPushButton("清空已完成")
-        self.clear_finished_btn.setEnabled(False)
-        self.clear_finished_btn.setObjectName("toolBtn")
-        self.clear_finished_btn.clicked.connect(self.clear_finished_requested.emit)
-        toolbar.addWidget(self.clear_finished_btn)
-
-        toolbar.addSpacerItem(QSpacerItem(12, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum))
 
         sep = QWidget()
         sep.setFixedWidth(1)
@@ -73,11 +62,46 @@ class FileListWidget(QWidget):
         self.invert_btn.clicked.connect(self.invert_selection)
         toolbar.addWidget(self.invert_btn)
 
+        sep3 = QWidget()
+        sep3.setFixedWidth(1)
+        sep3.setStyleSheet("background: #d0d7de;")
+        toolbar.addWidget(sep3)
+
+        self.open_dir_btn = QPushButton("打开目录")
+        self.open_dir_btn.setEnabled(False)
+        self.open_dir_btn.setObjectName("toolBtn")
+        self.open_dir_btn.clicked.connect(self.open_download_dir_requested.emit)
+
+        self.clear_finished_btn = QPushButton("清空已完成")
+        self.clear_finished_btn.setEnabled(False)
+        self.clear_finished_btn.setObjectName("toolBtn")
+        self.clear_finished_btn.clicked.connect(self.clear_finished_requested.emit)
+        toolbar.addWidget(self.open_dir_btn)
+        toolbar.addWidget(self.clear_finished_btn)
+
+        sep2 = QWidget()
+        sep2.setFixedWidth(1)
+        sep2.setStyleSheet("background: #d0d7de;")
+        toolbar.addWidget(sep2)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索文件名")
+        self.search_input.setFixedWidth(160)
+        self.search_input.returnPressed.connect(self._on_search)
+        toolbar.addWidget(self.search_input)
+
+        self.search_btn = QPushButton("搜索")
+        self.search_btn.setObjectName("toolBtn")
+        self.search_btn.clicked.connect(self._on_search)
+        toolbar.addWidget(self.search_btn)
+
+        self.reset_search_btn = QPushButton("重置")
+        self.search_btn.setObjectName("toolBtn")
+        self.reset_search_btn.clicked.connect(self._on_reset_search)
+        toolbar.addWidget(self.reset_search_btn)
+
         toolbar.addStretch()
 
-        self.total_label = QLabel("")
-        self.total_label.setStyleSheet("color: #5a6a7a; font-size: 12px;")
-        toolbar.addWidget(self.total_label)
         group_layout.addLayout(toolbar)
 
         self.table = QTableWidget()
@@ -97,12 +121,20 @@ class FileListWidget(QWidget):
         self.table.verticalHeader().setVisible(False)
         group_layout.addWidget(self.table)
 
+        info_row = QHBoxLayout()
+        info_row.addStretch()
+        self.total_label = QLabel("")
+        self.total_label.setStyleSheet("color: #5a6a7a; font-size: 12px;")
+        info_row.addWidget(self.total_label)
+        group_layout.addLayout(info_row)
+
         group.setLayout(group_layout)
         layout.addWidget(group)
 
-    def populate(self, files: list):
+    def populate(self, files: list, total_scanned: int = 0):
         self._files = files
         self._checkboxes = []
+        self._total_scanned = total_scanned or len(files)
         self.table.setRowCount(len(files))
 
         for row, fi in enumerate(files):
@@ -165,9 +197,24 @@ class FileListWidget(QWidget):
         total = len(self._files)
         if total > 0:
             total_size = sum(f.size for f in self._files)
-            self.total_label.setText(f"共 {total} 个文件 ({format_file_size(total_size)})")
+            self.total_label.setText(f"总文件数 {self._total_scanned} / 过滤后 {total} ({format_file_size(total_size)})")
         else:
             self.total_label.setText("")
+
+    def _on_search(self):
+        keyword = self.search_input.text().strip().lower()
+        if not keyword:
+            self._on_reset_search()
+            return
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 2)
+            match = keyword in name_item.text().lower() if name_item else False
+            self.table.setRowHidden(row, not match)
+
+    def _on_reset_search(self):
+        self.search_input.clear()
+        for row in range(self.table.rowCount()):
+            self.table.setRowHidden(row, False)
 
     @staticmethod
     def _get_type(filename: str) -> str:

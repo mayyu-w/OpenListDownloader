@@ -26,6 +26,7 @@ class Aria2Worker(QThread):
         self._secret = secret
         self._aria2_path = aria2_path
         self._save_dir = save_dir
+        self.process = None
 
     def run(self):
         rpc = Aria2RPC(rpc_url=self._rpc_url, secret=self._secret)
@@ -38,7 +39,7 @@ class Aria2Worker(QThread):
     def _do_start(self, rpc):
         ok, ver = rpc.verify_connection()
         if ok:
-            self.finished.emit(True, f"aria2 已在运行中 v{ver}")
+            self.finished.emit(True, f"EXTERNAL:{ver}")
             return
 
         if not os.path.isfile(self._aria2_path):
@@ -46,7 +47,7 @@ class Aria2Worker(QThread):
             return
 
         try:
-            Aria2RPC.start_aria2(
+            self.process = Aria2RPC.start_aria2(
                 aria2_path=self._aria2_path,
                 rpc_port=DEFAULT_RPC_PORT,
                 secret=self._secret,
@@ -88,6 +89,7 @@ class Aria2Widget(QWidget):
         super().__init__(parent)
         self._running = False
         self._worker = None
+        self._process = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -218,8 +220,33 @@ class Aria2Widget(QWidget):
         self._worker.start()
 
     def _on_start_finished(self, ok: bool, msg: str):
+        worker_process = self._worker.process if self._worker else None
         self._worker = None
         if ok:
+            if msg.startswith("EXTERNAL:"):
+                ver = msg.split(":", 1)[1]
+                from PyQt6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self, "检测到已有 aria2",
+                    f"检测到已有 aria2 v{ver} 在运行中。\n\n"
+                    "是 - 使用现有实例（关闭程序时不会停止该进程）\n"
+                    "否 - 请手动关闭后再点击启动",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._process = None
+                    self._running = True
+                    self._update_ui(True, f"已连接到外部 aria2 v{ver}")
+                    self.running_changed.emit(True)
+                else:
+                    self._set_status(False, "请先关闭现有 aria2 后重试")
+                    self.action_btn.setEnabled(True)
+                    self.action_btn.setText("启动 aria2")
+                    self._set_inputs_enabled(True)
+                return
+
+            self._process = worker_process
             self._running = True
             self._update_ui(True, msg)
             self._save_config()
@@ -233,8 +260,30 @@ class Aria2Widget(QWidget):
     def _on_stop_finished(self, ok: bool, msg: str):
         self._worker = None
         self._running = False
+        self._process = None
         self._update_ui(False, msg)
         self.running_changed.emit(False)
+
+    def force_cleanup(self):
+        """应用退出时强制清理自启动的 aria2 进程"""
+        if self._process is None:
+            return
+        logger.info("正在清理 aria2 进程 (PID=%s)", self._process.pid)
+        try:
+            rpc_url, secret = self._rpc_args()
+            rpc = Aria2RPC(rpc_url=rpc_url, secret=secret)
+            rpc._call("aria2.shutdown")
+        except Exception:
+            pass
+        try:
+            self._process.wait(timeout=3)
+        except Exception:
+            try:
+                self._process.terminate()
+            except Exception:
+                pass
+        self._process = None
+        self._running = False
 
     def _save_config(self):
         from utils.config_manager import save_config

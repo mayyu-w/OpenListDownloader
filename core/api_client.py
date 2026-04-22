@@ -23,27 +23,48 @@ class OpenListClient:
         data = resp.json()
         if data.get("code") != 200:
             raise ValueError(f"登录失败: {data.get('message', '未知错误')}")
-        token = data["data"]["token"]
+        token_data = data.get("data")
+        if not token_data or not isinstance(token_data, dict):
+            raise ValueError("登录失败: 服务器返回数据格式异常")
+        token = token_data.get("token")
+        if not token:
+            raise ValueError("登录失败: 未获取到有效令牌")
         return token
 
     def _request(self, path: str, body: dict) -> dict:
-        self.token_manager.ensure_token()
-        headers = self.token_manager.auth_header
-        url = f"{self.token_manager._base_url}{path}"
-        resp = self.session.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != 200:
-            logger.warning("请求失败 code=%s msg=%s, 尝试重新登录", data.get("code"), data.get("message"))
-            self.token_manager.invalidate()
-            self.token_manager.refresh()
+        max_retries = 3
+        last_error = ""
+        for attempt in range(max_retries):
+            self.token_manager.ensure_token()
             headers = self.token_manager.auth_header
-            resp = self.session.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            data = resp.json()
+            url = f"{self.token_manager._base_url}{path}"
+            try:
+                resp = self.session.post(url, json=body, headers=headers, timeout=REQUEST_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.RequestException as e:
+                last_error = str(e)
+                if attempt < max_retries - 1:
+                    logger.warning("请求异常 (%d/%d): %s", attempt + 1, max_retries, e)
+                    self.token_manager.invalidate()
+                    continue
+                raise
+
             if data.get("code") != 200:
-                raise ValueError(f"请求失败: {data.get('message', '未知错误')}")
-        return data.get("data", {})
+                last_error = data.get("message", "未知错误")
+                if attempt < max_retries - 1:
+                    logger.warning("请求失败 code=%s msg=%s (%d/%d)",
+                                   data.get("code"), last_error, attempt + 1, max_retries)
+                    self.token_manager.invalidate()
+                    continue
+                raise ValueError(f"请求失败: {last_error}")
+
+            result = data.get("data")
+            if result is None:
+                raise ValueError("服务器返回数据格式异常")
+            return result
+
+        raise ValueError(f"请求失败，已重试 {max_retries} 次: {last_error}")
 
     def list_files(self, path: str, page: int = 1, per_page: int = PER_PAGE) -> dict:
         body = {

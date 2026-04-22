@@ -68,19 +68,14 @@ class Aria2RPC:
             gids.append(gid)
         return gids
 
-    def get_download_status(self, gid: str) -> dict:
-        keys = [
-            "gid", "status", "totalLength", "completedLength",
-            "downloadSpeed", "errorCode", "errorMessage", "files",
-        ]
-        result = self._call("aria2.tellStatus", [gid, keys])
+    def _parse_status(self, result: dict) -> dict:
         status = result.get("status", "unknown")
         total = int(result.get("totalLength", 0))
         completed = int(result.get("completedLength", 0))
         speed = int(result.get("downloadSpeed", 0))
         progress = int(completed / total * 100) if total > 0 else 0
         return {
-            "gid": gid,
+            "gid": result.get("gid", ""),
             "status": status,
             "total_length": total,
             "completed_length": completed,
@@ -89,6 +84,42 @@ class Aria2RPC:
             "error_code": result.get("errorCode", ""),
             "error_message": result.get("errorMessage", ""),
         }
+
+    def get_download_status(self, gid: str) -> dict:
+        keys = [
+            "gid", "status", "totalLength", "completedLength",
+            "downloadSpeed", "errorCode", "errorMessage", "files",
+        ]
+        result = self._call("aria2.tellStatus", [gid, keys])
+        return self._parse_status(result)
+
+    def get_active_downloads(self) -> list[dict]:
+        keys = [
+            "gid", "status", "totalLength", "completedLength",
+            "downloadSpeed", "errorCode", "errorMessage", "files",
+        ]
+        results = self._call("aria2.tellActive", [keys])
+        return [self._parse_status(r) for r in results]
+
+    def get_stopped_downloads(self, offset: int = 0, count: int = 100) -> list[dict]:
+        keys = [
+            "gid", "status", "totalLength", "completedLength",
+            "downloadSpeed", "errorCode", "errorMessage", "files",
+        ]
+        results = self._call("aria2.tellStopped", [offset, count, keys])
+        return [self._parse_status(r) for r in results]
+
+    def pause_all(self):
+        self._call("aria2.pauseAll")
+
+    def resume_all(self):
+        self._call("aria2.unpauseAll")
+
+    def remove_download(self, gid: str):
+        self._call("aria2.remove", [gid])
+
+    def force_remove_download(self, gid: str):
+        self._call("aria2.forceRemove", [gid])
 
     @staticmethod
     def check_aria2_binary(aria2_path: str) -> tuple:
@@ -117,6 +148,9 @@ class Aria2RPC:
         if save_dir:
             cmd.append(f"--dir={save_dir}")
 
-        logger.info("启动 aria2: %s", " ".join(cmd))
+        logger.info("启动 aria2: %s", " ".join(
+            arg if not arg.startswith("--rpc-secret=") else "--rpc-secret=***"
+            for arg in cmd
+        ))
         proc = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
         return proc

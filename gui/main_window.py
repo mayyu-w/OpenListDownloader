@@ -4,9 +4,9 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
     QStatusBar, QMessageBox, QSplitter, QProgressBar,
-    QScrollArea, QSizePolicy, QMenuBar,
+    QScrollArea, QSizePolicy, QMenuBar, QProgressDialog,
 )
-from PyQt6.QtCore import Qt, QUrl, QTimer
+from PyQt6.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal, QCoreApplication
 from PyQt6.QtGui import QIcon, QAction
 from PyQt6.QtGui import QDesktopServices
 
@@ -24,6 +24,101 @@ from version import __version__
 import os
 
 
+class DownloadWorker(QThread):
+    """在后台线程中并发获取 raw_url 并推送到 aria2"""
+    task_ready = pyqtSignal(int, str)       # task_id, gid
+    task_failed = pyqtSignal(int, str)      # task_id, error
+    progress = pyqtSignal(int, int)         # current, total
+    finished = pyqtSignal()
+
+    def __init__(self, client, rpc, files, save_dir, auth_header, parent=None):
+        super().__init__(parent)
+        self._client = client
+        self._rpc = rpc
+        self._files = files
+        self._save_dir = save_dir
+        self._auth_header = auth_header
+
+    def run(self):
+        total = len(self._files)
+        for i, (task_id, fi) in enumerate(self._files):
+            try:
+                info = self._client.get_file_info(fi.path)
+                raw_url = info.get("raw_url", "")
+                if not raw_url:
+                    logger.warning("未获取到下载链接: %s", fi.name)
+                    self.task_failed.emit(task_id, "未获取到下载链接")
+                    continue
+
+                gid = self._rpc.add_download(
+                    url=raw_url,
+                    save_dir=self._save_dir,
+                    filename=fi.name,
+                    headers=self._auth_header,
+                )
+                logger.info("已添加下载: %s GID=%s", fi.name, gid)
+                self.task_ready.emit(task_id, gid)
+            except Exception as e:
+                logger.error("下载失败 %s: %s", fi.name, e)
+                self.task_failed.emit(task_id, str(e))
+            self.progress.emit(i + 1, total)
+        self.finished.emit()
+
+
+class PollWorker(QThread):
+    """在后台线程中查询 aria2 所有任务状态"""
+    progress_updated = pyqtSignal(list)
+
+    def __init__(self, rpc, tasks, parent=None):
+        super().__init__(parent)
+        self._rpc = rpc
+        self._tasks = tasks
+
+    def run(self):
+        gid_to_tid = {}
+        for tid, t in self._tasks.items():
+            if t["gid"] and t["status"] not in ("complete", "error", "removed"):
+                gid_to_tid[t["gid"]] = tid
+
+        if not gid_to_tid:
+            self.progress_updated.emit([])
+            return
+
+        updates = []
+        found_gids = set()
+
+        try:
+            for info in self._rpc.get_active_downloads():
+                gid = info["gid"]
+                found_gids.add(gid)
+                tid = gid_to_tid.get(gid)
+                if tid is not None:
+                    updates.append((tid, info))
+        except Exception as e:
+            logger.warning("查询活动下载失败: %s", e)
+
+        try:
+            total = len(gid_to_tid)
+            for info in self._rpc.get_stopped_downloads(0, min(total + 200, 1000)):
+                gid = info["gid"]
+                found_gids.add(gid)
+                tid = gid_to_tid.get(gid)
+                if tid is not None:
+                    updates.append((tid, info))
+        except Exception as e:
+            logger.warning("查询已完成下载失败: %s", e)
+
+        for gid, tid in gid_to_tid.items():
+            if gid not in found_gids:
+                try:
+                    info = self._rpc.get_download_status(gid)
+                    updates.append((tid, info))
+                except Exception:
+                    pass
+
+        self.progress_updated.emit(updates)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -37,9 +132,11 @@ class MainWindow(QMainWindow):
         self.token_manager = TokenManager(OpenListClient.do_login)
         self.client = OpenListClient(self.token_manager)
         self.scanner: FileScanner = None
+        self._download_worker: DownloadWorker = None
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_download_progress)
         self._rpc: Aria2RPC = None
+        self._poll_worker: PollWorker = None
 
         self._setup_ui()
         self._setup_menu()
@@ -119,6 +216,9 @@ class MainWindow(QMainWindow):
         self.file_list_widget.clear_finished_requested.connect(self._on_clear_finished)
 
         self.download_progress_widget = DownloadProgressWidget()
+        self.download_progress_widget.pause_all_requested.connect(self._on_pause_all)
+        self.download_progress_widget.resume_all_requested.connect(self._on_resume_all)
+        self.download_progress_widget.delete_all_requested.connect(self._on_delete_all)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
         right_splitter.addWidget(self.file_list_widget)
@@ -154,16 +254,17 @@ class MainWindow(QMainWindow):
             from utils.config_manager import save_config
             save_config(server_url=base_url, username=username)
         except Exception as e:
-            self.login_widget.set_status(False, f"连接失败: {e}")
+            self.login_widget.set_status(False, "连接失败")
             self.scan_btn.setEnabled(False)
             logger.exception("登录失败")
+            QMessageBox.warning(self, "连接失败", f"服务器连接失败:\n\n{e}")
 
     def _on_disconnect(self):
-        active = self.download_progress_widget.get_active_gids()
-        if active:
+        unfinished = self.download_progress_widget.get_unfinished_count()
+        if unfinished:
             reply = QMessageBox.warning(
                 self, "断开连接",
-                f"当前有 {len(active)} 个下载任务尚未完成。\n断开连接后更换账号可能导致续传失败。\n\n是否确认断开？",
+                f"当前有 {unfinished} 个下载任务尚未完成。\n断开连接后更换账号可能导致续传失败。\n\n是否确认断开？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -212,11 +313,11 @@ class MainWindow(QMainWindow):
     def _on_scan_progress(self, current_path: str):
         self.status_bar.showMessage(f"扫描中: {current_path}")
 
-    def _on_scan_finished(self, files: list):
+    def _on_scan_finished(self, files: list, total_scanned: int):
         self.scan_btn.setEnabled(True)
         self.scan_progress.setRange(0, 1)
         self.scan_progress.setValue(1)
-        self.file_list_widget.populate(files)
+        self.file_list_widget.populate(files, total_scanned=total_scanned)
         self.status_bar.showMessage(f"扫描完成, 共 {len(files)} 个文件")
 
     def _on_scan_error(self, error: str):
@@ -263,41 +364,132 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.No:
                 return
 
+        total = len(selected)
+        self._download_total = total
+        self._download_added = 0
+        self.file_list_widget.download_btn.setEnabled(False)
+
+        self._progress_dialog = QProgressDialog("正在准备下载任务...", None, 0, total, self)
+        self._progress_dialog.setWindowTitle("添加下载任务")
+        self._progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress_dialog.setMinimumDuration(0)
+        self._progress_dialog.setAutoClose(False)
+        self._progress_dialog.setAutoReset(False)
+        self._progress_dialog.setMinimumWidth(420)
+        self._progress_dialog.setCancelButton(None)
+        self._progress_dialog.setWindowFlags(
+            self._progress_dialog.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint
+        )
+        self._progress_dialog.setValue(0)
+        QCoreApplication.processEvents()
+
+        self._progress_dialog.setLabelText("正在连接 aria2...")
+        QCoreApplication.processEvents()
         rpc = Aria2RPC(rpc_url=rpc_config["rpc_url"], secret=rpc_config["secret"])
         ok, ver = rpc.verify_connection()
         if not ok:
+            self._progress_dialog.close()
+            self._progress_dialog = None
             QMessageBox.critical(self, "错误", f"aria2 连接失败: {ver}\n请确认 aria2 已启动")
+            self.file_list_widget.download_btn.setEnabled(True)
             return
-
         self._rpc = rpc
-        self.file_list_widget.download_btn.setEnabled(False)
-        self.status_bar.showMessage("正在获取下载链接并添加任务...")
 
-        for fi in selected:
+        self._progress_dialog.setLabelText(f"正在创建任务列表 (0/{total})...")
+        self.download_progress_widget.table.setUpdatesEnabled(False)
+        self.download_progress_widget.table.setSortingEnabled(False)
+        file_tasks = []
+        for idx, fi in enumerate(selected):
             task_id = self.download_progress_widget.add_task(fi.name, fi.size)
-            try:
-                info = self.client.get_file_info(fi.path)
-                raw_url = info.get("raw_url", "")
-                if not raw_url:
-                    logger.warning("未获取到下载链接: %s", fi.name)
-                    self.download_progress_widget.set_task_error(task_id, "未获取到下载链接")
-                    continue
+            file_tasks.append((task_id, fi))
+            if idx % 50 == 0:
+                self._progress_dialog.setLabelText(f"正在创建任务列表 ({idx}/{total})...")
+                QCoreApplication.processEvents()
+        self.download_progress_widget.table.setSortingEnabled(True)
+        self.download_progress_widget.table.setUpdatesEnabled(True)
 
-                gid = rpc.add_download(
-                    url=raw_url,
-                    save_dir=rpc_config["save_dir"],
-                    filename=fi.name,
-                    headers=self.token_manager.auth_header if self.token_manager.auth_header else None,
-                )
-                logger.info("已添加下载: %s GID=%s", fi.name, gid)
-                self.download_progress_widget.set_task_gid(task_id, gid)
-            except Exception as e:
-                logger.error("下载失败 %s: %s", fi.name, e)
-                self.download_progress_widget.set_task_error(task_id, str(e))
+        self._progress_dialog.setLabelText(f"已添加 0 / 待添加 {total} / 总共 {total}")
 
+        auth_header = self.token_manager.auth_header if self.token_manager.auth_header else None
+        self._download_worker = DownloadWorker(
+            client=self.client,
+            rpc=rpc,
+            files=file_tasks,
+            save_dir=rpc_config["save_dir"],
+            auth_header=auth_header,
+        )
+        self._download_worker.task_ready.connect(self._on_task_ready)
+        self._download_worker.task_failed.connect(self._on_task_failed)
+        self._download_worker.progress.connect(self._on_download_progress)
+        self._download_worker.finished.connect(self._on_download_finished)
+        self._download_worker.start()
+
+    def _on_task_ready(self, task_id: int, gid: str):
+        self._download_added += 1
+        self.download_progress_widget.set_task_gid(task_id, gid)
+
+    def _on_task_failed(self, task_id: int, error: str):
+        self.download_progress_widget.set_task_error(task_id, error)
+
+    def _on_download_progress(self, current: int, total: int):
+        pending = total - current
+        if hasattr(self, "_progress_dialog") and self._progress_dialog:
+            self._progress_dialog.setLabelText(f"已添加 {self._download_added} / 待添加 {pending} / 总共 {total}")
+            self._progress_dialog.setValue(current)
+
+    def _on_download_finished(self):
+        if self._progress_dialog:
+            self._progress_dialog.close()
+            self._progress_dialog = None
+        self._download_worker = None
         self.file_list_widget.download_btn.setEnabled(True)
-        self.status_bar.showMessage("下载任务已添加，正在监控进度...")
-        self._poll_timer.start(2000)
+        unfinished = self.download_progress_widget.get_unfinished_count()
+        if unfinished:
+            self.status_bar.showMessage(f"下载任务已添加（{unfinished} 个未完成），正在监控进度...")
+            self._poll_timer.start(2000)
+        else:
+            self.status_bar.showMessage("所有任务获取下载链接失败，请检查网络或文件路径")
+        self._update_clear_finished_btn()
+
+    def _on_pause_all(self):
+        if not self._rpc:
+            return
+        try:
+            self._rpc.pause_all()
+            self.status_bar.showMessage("已暂停所有下载任务")
+        except Exception as e:
+            self.status_bar.showMessage(f"暂停失败: {e}")
+
+    def _on_resume_all(self):
+        if not self._rpc:
+            return
+        try:
+            self._rpc.resume_all()
+            self.status_bar.showMessage("已恢复所有下载任务")
+            if not self._poll_timer.isActive():
+                self._poll_timer.start(2000)
+        except Exception as e:
+            self.status_bar.showMessage(f"恢复失败: {e}")
+
+    def _on_delete_all(self):
+        reply = QMessageBox.question(
+            self, "确认删除",
+            "确定要删除所有下载任务吗？\n正在下载的任务将被强制停止。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.No:
+            return
+        if self._rpc:
+            for gid in self.download_progress_widget.get_all_gids():
+                try:
+                    self._rpc.force_remove_download(gid)
+                except Exception:
+                    pass
+        self._poll_timer.stop()
+        self.download_progress_widget.clear_all()
+        self.status_bar.showMessage("所有下载任务已删除")
+        self._update_clear_finished_btn()
 
     def _setup_menu(self):
         menu_bar = QMenuBar(self)
@@ -326,20 +518,23 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._poll_timer.stop()
+        if self._download_worker and self._download_worker.isRunning():
+            self._download_worker.wait(5000)
         if self.scanner and self.scanner.isRunning():
             self.scanner.cancel()
             self.scanner.wait(3000)
+        self.aria2_widget.force_cleanup()
         event.accept()
 
     def _on_aria2_running_changed(self, running: bool):
         self.file_list_widget.open_dir_btn.setEnabled(running)
 
     def _on_aria2_stop_requested(self):
-        active = self.download_progress_widget.get_active_gids()
-        if active:
+        unfinished = self.download_progress_widget.get_unfinished_count()
+        if unfinished:
             reply = QMessageBox.question(
                 self, "确认关闭",
-                f"当前有 {len(active)} 个任务正在下载中，关闭 aria2 将停止所有下载。\n是否立即停止下载并关闭 aria2？",
+                f"当前有 {unfinished} 个任务正在下载中，关闭 aria2 将停止所有下载。\n是否立即停止下载并关闭 aria2？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -368,18 +563,24 @@ class MainWindow(QMainWindow):
         if not self._rpc:
             self._poll_timer.stop()
             return
-        active = self.download_progress_widget.get_active_gids()
-        if not active:
+
+        if self.download_progress_widget.all_finished():
             self._poll_timer.stop()
             self.status_bar.showMessage("所有下载任务已完成")
             self._update_clear_finished_btn()
             return
-        for row, gid in active:
-            try:
-                info = self._rpc.get_download_status(gid)
-                self.download_progress_widget.update_task_progress(row, info)
-            except Exception as e:
-                logger.warning("查询进度失败 GID=%s: %s", gid, e)
+
+        if self._poll_worker and self._poll_worker.isRunning():
+            return
+
+        tasks = dict(self.download_progress_widget._tasks)
+        self._poll_worker = PollWorker(self._rpc, tasks)
+        self._poll_worker.progress_updated.connect(self._on_poll_result)
+        self._poll_worker.start()
+
+    def _on_poll_result(self, updates):
+        if updates:
+            self.download_progress_widget.batch_update(updates)
         self._update_clear_finished_btn()
         if self.download_progress_widget.all_finished():
             self._poll_timer.stop()

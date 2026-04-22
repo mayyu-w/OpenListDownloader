@@ -1,6 +1,6 @@
 # OpenListDownloader
 
-![Release](https://img.shields.io/badge/release-v0.2.0-blue)
+![Release](https://img.shields.io/github/v/release/mayyu0203/OpenListDownloader?color=blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.10+-yellow)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -26,7 +26,7 @@ OpenList 文件下载器是一个基于 PyQt6 的桌面客户端，用于从 [Op
 
 ### 环境要求
 
-- Python 3.10+
+- Python 3.13+
 - Windows 10/11
 - [aria2](https://github.com/aria2/aria2)（可选，用于下载）
 
@@ -46,11 +46,20 @@ python main.py
 
 ### 使用步骤
 
-1. 在「服务器连接」区域输入 OpenList 地址、用户名、密码，点击「连接」
-2. 在「aria2 配置」区域设置 aria2 路径和下载目录，点击「启动 aria2」
-3. 在「文件扫描」区域输入远程路径和文件后缀，点击「扫描文件」
-4. 在文件列表中勾选需要下载的文件，点击「开始下载」
-5. 在下载进度面板中实时查看下载状态，完成后可点击「清空已完成」清理记录
+1. **连接服务器** — 在「服务器连接」区域填写以下信息，点击「连接」
+   - **服务器地址**：OpenList 服务地址，格式 `http://IP:端口`，例如 `http://10.49.1.35:5255`
+   - **用户名**：OpenList 登录用户名，例如 `admin`
+   - **密码**：对应密码
+2. **配置 aria2** — 在「aria2 配置」区域填写以下信息，点击「启动 aria2」
+   - **aria2 路径**：本地 `aria2c.exe` 的完整路径，例如 `D:\Tools\aria2\aria2c.exe`
+   - **RPC 地址**：aria2 JSON-RPC 地址，格式 `http://IP:6800/jsonrpc`，本机默认 `http://localhost:6800/jsonrpc`
+   - **RPC 密码**：与 aria2 启动参数 `--rpc-secret` 一致，未设置则留空
+   - **保存目录**：文件下载保存的本地目录，例如 `D:\Downloads`
+3. **扫描文件** — 在「文件扫描」区域填写以下信息，点击「扫描文件」
+   - **远程路径**：OpenList 网盘中的目录路径，格式 `/驱动器/目录/子目录`，例如 `/阿里云盘/影视` 或 `/test/f1/doc1`
+   - **文件后缀**：按后缀过滤，多个用英文逗号分隔，例如 `.mp4,.mkv,.avi`，留空则扫描全部文件
+4. **下载文件** — 在文件列表中勾选需要下载的文件，点击「开始下载」
+5. **查看进度** — 在下载进度面板中实时查看下载状态（等待中/下载中/已完成/失败），完成后可点击「清空已完成」清理记录
 
 ## 项目结构
 
