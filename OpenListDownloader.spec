@@ -21,8 +21,6 @@ a = Analysis(
         'tkinter', '_tkinter',
         'unittest',
         'xml.parsers',
-        'email',
-        'html',
         'pydoc',
         'doctest',
         'test',
