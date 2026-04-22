@@ -1,6 +1,6 @@
 # OpenListDownloader
 
-![Release](https://img.shields.io/github/v/release/mayyu0203/OpenListDownloader?color=blue)
+![Release](https://img.shields.io/github/v/release/mayyu-w/OpenListDownloader?color=blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Python](https://img.shields.io/badge/python-3.10+-yellow)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -33,7 +33,7 @@ OpenList 文件下载器是一个基于 PyQt6 的桌面客户端，用于从 [Op
 ### 安装
 
 ```bash
-git clone https://github.com/mayyu0203/OpenListDownloader.git
+git clone https://github.com/mayyu-w/OpenListDownloader.git
 cd OpenListDownloader
 pip install -r requirements.txt
 ```
