@@ -18,6 +18,7 @@ from gui.login_widget import LoginWidget
 from gui.file_list_widget import FileListWidget
 from gui.aria2_widget import Aria2Widget
 from gui.download_progress_widget import DownloadProgressWidget
+from gui.about_dialog import AboutDialog
 from utils.format import format_file_size
 from utils.logger import logger
 from version import __version__
@@ -213,7 +214,6 @@ class MainWindow(QMainWindow):
         self.file_list_widget.selection_changed.connect(self._on_selection_changed)
         self.file_list_widget.download_requested.connect(self._on_download)
         self.file_list_widget.open_download_dir_requested.connect(self._on_open_download_dir)
-        self.file_list_widget.clear_finished_requested.connect(self._on_clear_finished)
 
         self.download_progress_widget = DownloadProgressWidget()
         self.download_progress_widget.pause_all_requested.connect(self._on_pause_all)
@@ -449,7 +449,6 @@ class MainWindow(QMainWindow):
             self._poll_timer.start(2000)
         else:
             self.status_bar.showMessage("所有任务获取下载链接失败，请检查网络或文件路径")
-        self._update_clear_finished_btn()
 
     def _on_pause_all(self):
         if not self._rpc:
@@ -489,7 +488,6 @@ class MainWindow(QMainWindow):
         self._poll_timer.stop()
         self.download_progress_widget.clear_all()
         self.status_bar.showMessage("所有下载任务已删除")
-        self._update_clear_finished_btn()
 
     def _setup_menu(self):
         menu_bar = QMenuBar(self)
@@ -505,6 +503,12 @@ class MainWindow(QMainWindow):
         act_log.triggered.connect(self._open_log_dir)
         help_menu.addAction(act_log)
 
+        help_menu.addSeparator()
+
+        act_about = QAction("关于", self)
+        act_about.triggered.connect(self._on_about)
+        help_menu.addAction(act_about)
+
     def _open_config_dir(self):
         from utils.config_manager import load_config
         config_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
@@ -515,6 +519,10 @@ class MainWindow(QMainWindow):
         log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
         os.makedirs(log_dir, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir))
+
+    def _on_about(self):
+        dlg = AboutDialog(self)
+        dlg.exec()
 
     def closeEvent(self, event):
         self._poll_timer.stop()
@@ -550,14 +558,8 @@ class MainWindow(QMainWindow):
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(save_dir))
 
-    def _on_clear_finished(self):
-        self.download_progress_widget.clear_finished()
-        self._update_clear_finished_btn()
 
-    def _update_clear_finished_btn(self):
-        self.file_list_widget.clear_finished_btn.setEnabled(
-            self.download_progress_widget.has_finished_tasks()
-        )
+
 
     def _poll_download_progress(self):
         if not self._rpc:
@@ -567,7 +569,6 @@ class MainWindow(QMainWindow):
         if self.download_progress_widget.all_finished():
             self._poll_timer.stop()
             self.status_bar.showMessage("所有下载任务已完成")
-            self._update_clear_finished_btn()
             return
 
         if self._poll_worker and self._poll_worker.isRunning():
@@ -581,8 +582,6 @@ class MainWindow(QMainWindow):
     def _on_poll_result(self, updates):
         if updates:
             self.download_progress_widget.batch_update(updates)
-        self._update_clear_finished_btn()
         if self.download_progress_widget.all_finished():
             self._poll_timer.stop()
             self.status_bar.showMessage("所有下载任务已完成")
-            self._update_clear_finished_btn()

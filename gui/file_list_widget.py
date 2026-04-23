@@ -15,7 +15,6 @@ class FileListWidget(QWidget):
     selection_changed = pyqtSignal(int)
     download_requested = pyqtSignal()
     open_download_dir_requested = pyqtSignal()
-    clear_finished_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,13 +70,7 @@ class FileListWidget(QWidget):
         self.open_dir_btn.setEnabled(False)
         self.open_dir_btn.setObjectName("toolBtn")
         self.open_dir_btn.clicked.connect(self.open_download_dir_requested.emit)
-
-        self.clear_finished_btn = QPushButton("清空已完成")
-        self.clear_finished_btn.setEnabled(False)
-        self.clear_finished_btn.setObjectName("toolBtn")
-        self.clear_finished_btn.clicked.connect(self.clear_finished_requested.emit)
         toolbar.addWidget(self.open_dir_btn)
-        toolbar.addWidget(self.clear_finished_btn)
 
         sep2 = QWidget()
         sep2.setFixedWidth(1)

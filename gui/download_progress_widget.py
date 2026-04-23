@@ -212,10 +212,12 @@ class DownloadProgressWidget(QWidget):
             k: v for k, v in self._tasks.items() if v["status"] != "complete"
         }
         self._rebuild_table()
+        self._update_button_states()
 
     def clear_all(self):
         self._tasks.clear()
         self._rebuild_table()
+        self._update_button_states()
 
     def get_all_gids(self) -> list[str]:
         return [t["gid"] for t in self._tasks.values() if t["gid"]]
@@ -223,12 +225,24 @@ class DownloadProgressWidget(QWidget):
     def _on_clear_finished(self):
         self.clear_finished()
 
+    def _update_button_states(self):
+        has_any = bool(self._tasks)
+        has_active = any(t["status"] == "active" for t in self._tasks.values())
+        has_paused = any(t["status"] == "paused" for t in self._tasks.values())
+        has_completed = any(t["status"] == "complete" for t in self._tasks.values())
+
+        self.pause_all_btn.setEnabled(has_active)
+        self.resume_all_btn.setEnabled(has_paused)
+        self.clear_finished_btn.setEnabled(has_completed)
+        self.delete_all_btn.setEnabled(has_any)
+
     def remove_waiting_tasks(self):
         self._tasks = {
             k: v for k, v in self._tasks.items()
             if not (v["status"] == "waiting" and not v["gid"])
         }
         self._rebuild_table()
+        self._update_button_states()
 
     def _append_table_row(self, task: dict):
         row = self.table.rowCount()
@@ -248,6 +262,7 @@ class DownloadProgressWidget(QWidget):
             self.update_task_progress(task_id, info)
         self.table.setUpdatesEnabled(True)
         self.table.setSortingEnabled(True)
+        self._update_button_states()
 
     def _rebuild_table(self):
         self.table.setSortingEnabled(False)
