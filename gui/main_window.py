@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
     QStatusBar, QMessageBox, QSplitter, QProgressBar,
     QScrollArea, QSizePolicy, QMenuBar, QProgressDialog,
+    QCheckBox, QSpinBox,
 )
 from PyQt6.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal, QCoreApplication
 from PyQt6.QtGui import QIcon, QAction
@@ -127,8 +128,8 @@ class MainWindow(QMainWindow):
         icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.ico")
         if os.path.isfile(icon_path):
             self.setWindowIcon(QIcon(icon_path))
-        self.setMinimumSize(1200, 800)
-        self.resize(1300, 850)
+        self.setMinimumSize(1200, 900)
+        self.resize(1300, 900)
 
         self.token_manager = TokenManager(OpenListClient.do_login)
         self.client = OpenListClient(self.token_manager)
@@ -177,6 +178,19 @@ class MainWindow(QMainWindow):
         self.suffix_input = QLineEdit()
         self.suffix_input.setPlaceholderText("如: .mp4,.mkv,.avi（留空不过滤）")
         scan_layout.addRow("文件后缀:", self.suffix_input)
+
+        recursive_row = QHBoxLayout()
+        self.recursive_check = QCheckBox("递归查询子文件夹")
+        self.recursive_check.setChecked(True)
+        self.recursive_check.toggled.connect(self._on_recursive_toggled)
+        recursive_row.addWidget(self.recursive_check)
+        recursive_row.addWidget(QLabel("  深度:"))
+        self.depth_spin = QSpinBox()
+        self.depth_spin.setRange(1, 20)
+        self.depth_spin.setValue(20)
+        recursive_row.addWidget(self.depth_spin)
+        recursive_row.addStretch()
+        scan_layout.addRow(recursive_row)
 
         scan_btn_row = QHBoxLayout()
         self.scan_load_btn = QPushButton("加载配置")
@@ -274,6 +288,8 @@ class MainWindow(QMainWindow):
         self.scan_btn.setEnabled(False)
         self.path_input.clear()
         self.suffix_input.clear()
+        self.recursive_check.setChecked(True)
+        self.depth_spin.setValue(20)
         self.file_list_widget.clear_files()
         self.status_bar.showMessage("已断开连接 - 请重新登录")
 
@@ -284,6 +300,10 @@ class MainWindow(QMainWindow):
             self.path_input.setText(cfg["scan_path"])
         if cfg.get("scan_suffix"):
             self.suffix_input.setText(cfg["scan_suffix"])
+        if "scan_recursive" in cfg:
+            self.recursive_check.setChecked(cfg["scan_recursive"])
+        if "scan_depth" in cfg:
+            self.depth_spin.setValue(cfg["scan_depth"])
 
     def _on_scan(self):
         path = self.path_input.text().strip()
@@ -302,13 +322,22 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"正在扫描: {path}")
 
         from utils.config_manager import save_config
-        save_config(scan_path=path, scan_suffix=suffix_text)
+        save_config(scan_path=path, scan_suffix=suffix_text,
+                    scan_recursive=self.recursive_check.isChecked(),
+                    scan_depth=self.depth_spin.value())
 
-        self.scanner = FileScanner(self.client, path, suffixes)
+        self.scanner = FileScanner(
+            self.client, path, suffixes,
+            recursive=self.recursive_check.isChecked(),
+            max_depth=self.depth_spin.value(),
+        )
         self.scanner.scan_progress.connect(self._on_scan_progress)
         self.scanner.scan_finished.connect(self._on_scan_finished)
         self.scanner.scan_error.connect(self._on_scan_error)
         self.scanner.start()
+
+    def _on_recursive_toggled(self, checked: bool):
+        self.depth_spin.setEnabled(checked)
 
     def _on_scan_progress(self, current_path: str):
         self.status_bar.showMessage(f"扫描中: {current_path}")

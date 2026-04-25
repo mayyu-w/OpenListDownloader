@@ -26,11 +26,14 @@ class FileScanner(QThread):
     scan_error = pyqtSignal(str)
 
     def __init__(self, client: OpenListClient, root_path: str,
-                 suffixes: list, parent=None):
+                 suffixes: list, recursive: bool = True, max_depth: int = 20,
+                 parent=None):
         super().__init__(parent)
         self.client = client
         self.root_path = root_path
         self.suffixes = [s.lower() for s in suffixes]
+        self.recursive = recursive
+        self.max_depth = max_depth
         self._cancel_event = threading.Event()
         self.total_scanned = 0
 
@@ -39,7 +42,9 @@ class FileScanner(QThread):
 
     def run(self):
         try:
-            logger.info("开始扫描: %s (后缀过滤: %s)", self.root_path, self.suffixes or "无")
+            logger.info("开始扫描: %s (后缀过滤: %s, 递归: %s, 最大深度: %d)",
+                        self.root_path, self.suffixes or "无",
+                        self.recursive, self.max_depth)
             self.total_scanned = 0
             results = self._scan_dir(self.root_path, depth=0)
             if not self._cancel_event.is_set():
@@ -78,6 +83,11 @@ class FileScanner(QThread):
                 is_dir = item.get("is_dir", False)
 
                 if is_dir:
+                    if not self.recursive:
+                        continue
+                    if depth >= self.max_depth:
+                        logger.warning("超过用户设定递归深度 %d, 跳过: %s", self.max_depth, item_path)
+                        continue
                     sub_files = self._scan_dir(item_path, depth + 1)
                     all_files.extend(sub_files)
                 else:

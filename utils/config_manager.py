@@ -19,6 +19,8 @@ _DEFAULTS = {
     "server_url": "",
     "scan_path": "",
     "scan_suffix": "",
+    "scan_recursive": True,
+    "scan_depth": 20,
     "aria2_path": "",
     "rpc_url": "",
     "rpc_secret": "",
