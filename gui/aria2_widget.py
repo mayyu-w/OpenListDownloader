@@ -12,7 +12,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from config import DEFAULT_RPC_PORT
 from core.aria2_rpc import Aria2RPC
-from gui.styles import DEFAULT_RPC_URL, DEFAULT_RPC_SECRET, DEFAULT_SAVE_DIR
+from gui.styles import DEFAULT_RPC_URL, DEFAULT_RPC_SECRET, DEFAULT_SAVE_DIR, NoMenuLineEdit
 from utils.logger import logger
 
 
@@ -97,7 +97,7 @@ class Aria2Widget(QWidget):
         layout = QFormLayout()
 
         path_row = QHBoxLayout()
-        self.aria2_path_input = QLineEdit()
+        self.aria2_path_input = NoMenuLineEdit()
         self.aria2_path_input.setPlaceholderText("aria2c.exe 完整路径")
         path_row.addWidget(self.aria2_path_input)
         self.browse_aria2_btn = QPushButton("浏览")
@@ -106,17 +106,17 @@ class Aria2Widget(QWidget):
         path_row.addWidget(self.browse_aria2_btn)
         layout.addRow("aria2 路径:", path_row)
 
-        self.rpc_url_input = QLineEdit()
+        self.rpc_url_input = NoMenuLineEdit()
         self.rpc_url_input.setPlaceholderText(DEFAULT_RPC_URL)
         layout.addRow("RPC 地址:", self.rpc_url_input)
 
-        self.rpc_secret_input = QLineEdit()
+        self.rpc_secret_input = NoMenuLineEdit()
         self.rpc_secret_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.rpc_secret_input.setPlaceholderText("请输入 RPC 密码")
         layout.addRow("RPC 密码:", self.rpc_secret_input)
 
         dir_row = QHBoxLayout()
-        self.save_dir_input = QLineEdit()
+        self.save_dir_input = NoMenuLineEdit()
         self.save_dir_input.setPlaceholderText(DEFAULT_SAVE_DIR)
         dir_row.addWidget(self.save_dir_input)
         self.browse_dir_btn = QPushButton("浏览")

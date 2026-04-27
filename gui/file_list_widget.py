@@ -8,6 +8,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt
 
 from core.file_scanner import FileInfo
+from gui.styles import NoMenuLineEdit
+from config import PREVIEW_ALL_EXTS, PREVIEW_VIDEO_EXTS, PREVIEW_AUDIO_EXTS, PREVIEW_IMAGE_EXTS
 from utils.format import format_file_size
 
 
@@ -15,6 +17,7 @@ class FileListWidget(QWidget):
     selection_changed = pyqtSignal(int)
     download_requested = pyqtSignal()
     open_download_dir_requested = pyqtSignal()
+    file_double_clicked = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,7 +80,7 @@ class FileListWidget(QWidget):
         sep2.setStyleSheet("background: #d0d7de;")
         toolbar.addWidget(sep2)
 
-        self.search_input = QLineEdit()
+        self.search_input = NoMenuLineEdit()
         self.search_input.setPlaceholderText("搜索文件名")
         self.search_input.setFixedWidth(160)
         self.search_input.returnPressed.connect(self._on_search)
@@ -112,6 +115,7 @@ class FileListWidget(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         group_layout.addWidget(self.table)
 
         info_row = QHBoxLayout()
@@ -225,3 +229,28 @@ class FileListWidget(QWidget):
             if cb.isChecked()
         )
         return total, selected, selected_size
+
+    def _on_cell_double_clicked(self, row: int, _col: int):
+        if 0 <= row < len(self._files):
+            self.file_double_clicked.emit(self._files[row])
+
+    @staticmethod
+    def is_previewable(filename: str) -> bool:
+        dot = filename.lower().rfind(".")
+        if dot == -1:
+            return False
+        return filename[dot:].lower() in PREVIEW_ALL_EXTS
+
+    @staticmethod
+    def get_preview_category(filename: str) -> str:
+        dot = filename.lower().rfind(".")
+        if dot == -1:
+            return ""
+        ext = filename[dot:].lower()
+        if ext in PREVIEW_VIDEO_EXTS:
+            return "视频"
+        if ext in PREVIEW_AUDIO_EXTS:
+            return "音频"
+        if ext in PREVIEW_IMAGE_EXTS:
+            return "图片"
+        return ""

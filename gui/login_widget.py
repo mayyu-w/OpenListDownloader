@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal
 
-from gui.styles import DEFAULT_SERVER_URL
+from gui.styles import DEFAULT_SERVER_URL, NoMenuLineEdit
 
 
 class LoginWidget(QWidget):
@@ -21,15 +21,15 @@ class LoginWidget(QWidget):
         group = QGroupBox("服务器连接")
         layout = QFormLayout()
 
-        self.server_input = QLineEdit()
+        self.server_input = NoMenuLineEdit()
         self.server_input.setPlaceholderText(DEFAULT_SERVER_URL)
         layout.addRow("服务器地址:", self.server_input)
 
-        self.username_input = QLineEdit()
+        self.username_input = NoMenuLineEdit()
         self.username_input.setPlaceholderText("admin")
         layout.addRow("用户名:", self.username_input)
 
-        self.password_input = QLineEdit()
+        self.password_input = NoMenuLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("请输入密码")
         layout.addRow("密码:", self.password_input)

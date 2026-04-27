@@ -1,5 +1,22 @@
 # @author: awen
 
+from PyQt6.QtWidgets import QLineEdit, QPlainTextEdit
+
+
+class NoMenuLineEdit(QLineEdit):
+    """禁用右键菜单的文本输入框"""
+
+    def contextMenuEvent(self, event):
+        pass
+
+
+class NoMenuPlainTextEdit(QPlainTextEdit):
+    """禁用右键菜单的纯文本编辑框"""
+
+    def contextMenuEvent(self, event):
+        pass
+
+
 LIGHT_THEME = """
 QMainWindow, QWidget {
     background-color: #f5f7fa;

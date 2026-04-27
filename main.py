@@ -52,6 +52,19 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(LIGHT_THEME)
+
+    def _global_excepthook(exc_type, exc_value, exc_tb):
+        import traceback
+        from utils.logger import logger
+        tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        logger.critical("未捕获异常:\n%s", tb_text)
+        try:
+            QMessageBox.critical(None, "程序错误", f"发生未预期的错误:\n\n{exc_value}")
+        except Exception:
+            pass
+
+    sys.excepthook = _global_excepthook
+
     window = MainWindow()
     window.show()
     exit_code = app.exec()

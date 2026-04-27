@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
     QStatusBar, QMessageBox, QSplitter, QProgressBar,
     QScrollArea, QSizePolicy, QMenuBar, QProgressDialog,
-    QCheckBox, QSpinBox,
+    QCheckBox, QSpinBox, QDialog, QPlainTextEdit, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal, QCoreApplication
 from PyQt6.QtGui import QIcon, QAction
@@ -20,6 +20,7 @@ from gui.file_list_widget import FileListWidget
 from gui.aria2_widget import Aria2Widget
 from gui.download_progress_widget import DownloadProgressWidget
 from gui.about_dialog import AboutDialog
+from gui.styles import NoMenuLineEdit, NoMenuPlainTextEdit
 from utils.format import format_file_size
 from utils.logger import logger
 from version import __version__
@@ -121,6 +122,37 @@ class PollWorker(QThread):
         self.progress_updated.emit(updates)
 
 
+class PreviewWorker(QThread):
+    """在后台线程中获取文件 raw_url 用于预览"""
+    url_ready = pyqtSignal(str, str)
+    url_failed = pyqtSignal(str, str)
+
+    def __init__(self, client, file_info, parent=None):
+        super().__init__(parent)
+        self._client = client
+        self._file_info = file_info
+
+    def run(self):
+        try:
+            info = self._client.get_file_info(self._file_info.path)
+            raw_url = info.get("raw_url", "")
+            if not raw_url:
+                self.url_failed.emit("未获取到预览链接", self._file_info.name)
+                return
+            self.url_ready.emit(raw_url, self._file_info.name)
+        except Exception as e:
+            logger.error("预览获取链接失败 %s: %s", self._file_info.name, e)
+            self.url_failed.emit(str(e), self._file_info.name)
+
+
+class PathLineEdit(NoMenuLineEdit):
+    """双击打开编辑对话框的路径输入框"""
+    double_clicked_edit = pyqtSignal()
+
+    def mouseDoubleClickEvent(self, event):
+        self.double_clicked_edit.emit()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -139,6 +171,7 @@ class MainWindow(QMainWindow):
         self._poll_timer.timeout.connect(self._poll_download_progress)
         self._rpc: Aria2RPC = None
         self._poll_worker: PollWorker = None
+        self._preview_worker: PreviewWorker = None
 
         self._setup_ui()
         self._setup_menu()
@@ -171,11 +204,12 @@ class MainWindow(QMainWindow):
         scan_group = QGroupBox("文件扫描")
         scan_layout = QFormLayout()
         scan_layout.setSpacing(8)
-        self.path_input = QLineEdit()
-        self.path_input.setPlaceholderText("如: /阿里云盘/影视")
+        self.path_input = PathLineEdit()
+        self.path_input.setPlaceholderText("如: /阿里云盘/影视（双击可弹窗编辑）")
+        self.path_input.double_clicked_edit.connect(self._open_path_editor)
         scan_layout.addRow("远程路径:", self.path_input)
 
-        self.suffix_input = QLineEdit()
+        self.suffix_input = NoMenuLineEdit()
         self.suffix_input.setPlaceholderText("如: .mp4,.mkv,.avi（留空不过滤）")
         scan_layout.addRow("文件后缀:", self.suffix_input)
 
@@ -228,6 +262,7 @@ class MainWindow(QMainWindow):
         self.file_list_widget.selection_changed.connect(self._on_selection_changed)
         self.file_list_widget.download_requested.connect(self._on_download)
         self.file_list_widget.open_download_dir_requested.connect(self._on_open_download_dir)
+        self.file_list_widget.file_double_clicked.connect(self._on_file_double_clicked)
 
         self.download_progress_widget = DownloadProgressWidget()
         self.download_progress_widget.pause_all_requested.connect(self._on_pause_all)
@@ -339,6 +374,58 @@ class MainWindow(QMainWindow):
     def _on_recursive_toggled(self, checked: bool):
         self.depth_spin.setEnabled(checked)
 
+    def _open_path_editor(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("编辑远程路径")
+        dlg.setMinimumSize(540, 200)
+
+        layout = QVBoxLayout(dlg)
+
+        hint = QLabel("路径以 / 开头，如: /阿里云盘/影视")
+        hint.setStyleSheet("color: #9aa5b1; font-size: 11px;")
+        layout.addWidget(hint)
+
+        editor = NoMenuPlainTextEdit()
+        editor.setPlainText(self.path_input.text())
+        editor.setLineWrapMode(NoMenuPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(editor)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        text = editor.toPlainText().strip()
+        if not text:
+            return
+
+        issues = self._validate_path(text)
+        if issues:
+            QMessageBox.warning(self, "路径格式有误", "\n".join(issues))
+            return
+
+        self.path_input.setText(text)
+
+    def _validate_path(self, path: str) -> list:
+        issues = []
+        if path != path.strip():
+            issues.append("路径首尾包含空格")
+        illegal_chars = set('\\:*?"<>|')
+        found = sorted(set(c for c in path if c in illegal_chars))
+        if found:
+            display = " ".join(f"'{c}'" for c in found)
+            issues.append(f"包含 Windows 文件系统不允许的字符: {display}")
+        if any(ord(c) < 32 for c in path):
+            issues.append("包含控制字符")
+        if "  " in path:
+            issues.append("路径中包含连续空格")
+        return issues
+
     def _on_scan_progress(self, current_path: str):
         self.status_bar.showMessage(f"扫描中: {current_path}")
 
@@ -355,6 +442,60 @@ class MainWindow(QMainWindow):
         self.scan_progress.setValue(1)
         self.status_bar.showMessage(f"扫描失败: {error}")
         QMessageBox.critical(self, "扫描错误", error)
+
+    def _on_file_double_clicked(self, file_info):
+        try:
+            logger.info("双击预览请求: %s", getattr(file_info, 'name', 'unknown'))
+            if not FileListWidget.is_previewable(file_info.name):
+                QMessageBox.information(
+                    self, "无法预览",
+                    f"文件 \"{file_info.name}\" 不是可预览的媒体类型。\n\n"
+                    "支持预览的格式：音频(mp3/wav/flac/ogg/aac/wma)、"
+                    "视频(mp4/mkv/avi/mov/wmv/webm)、图片(jpg/png/gif/bmp/webp)"
+                )
+                return
+
+            if self._preview_worker and self._preview_worker.isRunning():
+                self.status_bar.showMessage("正在获取预览链接，请稍候...")
+                return
+
+            self.status_bar.showMessage(f"正在获取预览链接: {file_info.name} ...")
+            self._preview_worker = PreviewWorker(self.client, file_info)
+            self._preview_worker.url_ready.connect(self._on_preview_url_ready)
+            self._preview_worker.url_failed.connect(self._on_preview_url_failed)
+            self._preview_worker.start()
+        except Exception as e:
+            logger.exception("预览处理异常")
+            QMessageBox.warning(self, "预览错误", f"处理预览请求时出错:\n\n{e}")
+
+    def _on_preview_url_ready(self, raw_url: str, filename: str):
+        self._preview_worker = None
+        self.status_bar.showMessage(f"正在打开预览: {filename}")
+        logger.info("预览文件: %s -> %s", filename, raw_url[:100])
+
+        category = FileListWidget.get_preview_category(filename)
+        if category == "图片":
+            QDesktopServices.openUrl(QUrl(raw_url))
+            return
+
+        import tempfile
+        m3u_path = os.path.join(
+            tempfile.gettempdir(), f"openlist_preview_{os.getpid()}.m3u"
+        )
+        try:
+            with open(m3u_path, "w", encoding="utf-8") as f:
+                f.write("#EXTM3U\n")
+                f.write(f"#EXTINF:-1,{filename}\n")
+                f.write(raw_url)
+            os.startfile(m3u_path)
+        except Exception as e:
+            logger.warning("播放器启动失败，使用浏览器打开: %s", e)
+            QDesktopServices.openUrl(QUrl(raw_url))
+
+    def _on_preview_url_failed(self, error: str, filename: str):
+        self._preview_worker = None
+        self.status_bar.showMessage(f"预览失败: {filename}")
+        QMessageBox.warning(self, "预览失败", f"无法获取文件 \"{filename}\" 的预览链接:\n\n{error}")
 
     def _on_selection_changed(self, count: int):
         self.file_list_widget.download_btn.setEnabled(count > 0)
@@ -557,6 +698,8 @@ class MainWindow(QMainWindow):
         self._poll_timer.stop()
         if self._download_worker and self._download_worker.isRunning():
             self._download_worker.wait(5000)
+        if self._preview_worker and self._preview_worker.isRunning():
+            self._preview_worker.wait(3000)
         if self.scanner and self.scanner.isRunning():
             self.scanner.cancel()
             self.scanner.wait(3000)
