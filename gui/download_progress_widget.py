@@ -75,9 +75,9 @@ class DownloadProgressWidget(QWidget):
         group_layout.addLayout(toolbar)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(
-            ["序号", "文件名", "大小", "进度", "状态", "添加时间", "完成时间"]
+            ["序号", "文件名", "大小", "进度", "速度", "状态", "添加时间", "完成时间"]
         )
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -86,6 +86,7 @@ class DownloadProgressWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setColumnWidth(0, 50)
         self.table.setColumnWidth(3, 180)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -120,6 +121,7 @@ class DownloadProgressWidget(QWidget):
             "finish_time": "",
             "error_message": "",
             "last_active_time": 0.0,
+            "speed": 0,
         }
         self._append_table_row(self._tasks[task_id])
         return task_id
@@ -147,6 +149,7 @@ class DownloadProgressWidget(QWidget):
         if not task:
             return
         task["progress"] = info.get("progress", 0)
+        task["speed"] = info.get("speed", 0)
         status = info.get("status", task["status"])
         task["last_active_time"] = time.time()
         if status == "complete":
@@ -306,29 +309,37 @@ class DownloadProgressWidget(QWidget):
         bar.setFormat(f"{task['progress']}%")
         bar.setStyleSheet(self._progress_style(task["status"]))
 
+        speed_text = f"{format_file_size(task['speed'])}/s" if task["speed"] > 0 else ""
+        speed_item = self.table.item(row, 4)
+        if speed_item is None:
+            speed_item = QTableWidgetItem()
+            speed_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 4, speed_item)
+        speed_item.setText(speed_text)
+
         status_text = _STATUS_TEXT.get(task["status"], task["status"])
         if task["status"] == "error" and task.get("error_message"):
             status_text += f" ({task['error_message']})"
-        status_item = self.table.item(row, 4)
+        status_item = self.table.item(row, 5)
         if status_item is None:
             status_item = QTableWidgetItem()
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 4, status_item)
+            self.table.setItem(row, 5, status_item)
         status_item.setText(status_text)
         status_item.setData(Qt.ItemDataRole.UserRole, _STATUS_ORDER.get(status_text, 99))
 
-        add_item = self.table.item(row, 5)
+        add_item = self.table.item(row, 6)
         if add_item is None:
             add_item = QTableWidgetItem()
             add_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 5, add_item)
+            self.table.setItem(row, 6, add_item)
         add_item.setText(task["add_time"])
 
-        finish_item = self.table.item(row, 6)
+        finish_item = self.table.item(row, 7)
         if finish_item is None:
             finish_item = QTableWidgetItem()
             finish_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 6, finish_item)
+            self.table.setItem(row, 7, finish_item)
         finish_item.setText(task["finish_time"])
 
         self.table.setRowHeight(row, 28)
