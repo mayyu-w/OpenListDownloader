@@ -13,6 +13,8 @@ from utils.logger import logger
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "config", "user_config.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "config", "user_setting.json")
 SERVICE_NAME = "OpenListDownloader"
 
 _DEFAULTS = {
@@ -25,6 +27,11 @@ _DEFAULTS = {
     "rpc_url": "",
     "rpc_secret": "",
     "save_dir": "",
+}
+
+_SETTING_DEFAULTS = {
+    "dark_mode": False,
+    "close_to_tray": True,
 }
 
 
@@ -81,3 +88,27 @@ def save_config(**kwargs):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
     logger.info("配置已保存")
+
+
+def load_settings() -> dict:
+    data = dict(_SETTING_DEFAULTS)
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        data.update({k: v for k, v in saved.items() if k in _SETTING_DEFAULTS})
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning("加载设置失败: %s", e)
+    return data
+
+
+def save_settings(**kwargs):
+    current = load_settings()
+    for k, v in kwargs.items():
+        if k in _SETTING_DEFAULTS:
+            current[k] = v
+    os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    logger.info("设置已保存")

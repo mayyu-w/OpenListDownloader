@@ -5,11 +5,12 @@ from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QGroupBox, QProgressBar, QPushButton,
+    QHeaderView, QGroupBox, QProgressBar, QPushButton, QMenu,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 
-from utils.format import format_file_size
+from utils.format import format_file_size, format_eta
 
 
 _STATUS_TEXT = {
@@ -35,6 +36,7 @@ class DownloadProgressWidget(QWidget):
     pause_all_requested = pyqtSignal()
     resume_all_requested = pyqtSignal()
     delete_all_requested = pyqtSignal()
+    task_action_requested = pyqtSignal(str, int)  # action, task_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -75,9 +77,9 @@ class DownloadProgressWidget(QWidget):
         group_layout.addLayout(toolbar)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
-            ["序号", "文件名", "大小", "进度", "速度", "状态", "添加时间", "完成时间"]
+            ["序号", "文件名", "大小", "进度", "速度", "剩余时间", "状态", "添加时间", "完成时间"]
         )
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -87,6 +89,7 @@ class DownloadProgressWidget(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setColumnWidth(0, 50)
         self.table.setColumnWidth(3, 180)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -94,6 +97,8 @@ class DownloadProgressWidget(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSortingEnabled(True)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
         group_layout.addWidget(self.table)
 
         group.setLayout(group_layout)
@@ -106,7 +111,7 @@ class DownloadProgressWidget(QWidget):
                 return row
         return -1
 
-    def add_task(self, filename: str, size: int) -> int:
+    def add_task(self, filename: str, size: int, path: str = "") -> int:
         task_id = self._next_id
         self._next_id += 1
         now = datetime.now().strftime("%H:%M:%S")
@@ -122,6 +127,8 @@ class DownloadProgressWidget(QWidget):
             "error_message": "",
             "last_active_time": 0.0,
             "speed": 0,
+            "path": path,
+            "completed_length": 0,
         }
         self._append_table_row(self._tasks[task_id])
         return task_id
@@ -150,6 +157,7 @@ class DownloadProgressWidget(QWidget):
             return
         task["progress"] = info.get("progress", 0)
         task["speed"] = info.get("speed", 0)
+        task["completed_length"] = info.get("completed_length", 0)
         status = info.get("status", task["status"])
         task["last_active_time"] = time.time()
         if status == "complete":
@@ -224,6 +232,76 @@ class DownloadProgressWidget(QWidget):
 
     def get_all_gids(self) -> list[str]:
         return [t["gid"] for t in self._tasks.values() if t["gid"]]
+
+    def _task_id_at(self, pos) -> int:
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return -1
+        item = self.table.item(row, 0)
+        if not item:
+            return -1
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _on_context_menu(self, pos):
+        task_id = self._task_id_at(pos)
+        if task_id < 0:
+            return
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+
+        menu = QMenu(self)
+        status = task["status"]
+
+        if status == "active":
+            act_pause = QAction("暂停", self)
+            act_pause.triggered.connect(lambda: self.task_action_requested.emit("pause", task_id))
+            menu.addAction(act_pause)
+
+        if status == "paused":
+            act_resume = QAction("继续", self)
+            act_resume.triggered.connect(lambda: self.task_action_requested.emit("resume", task_id))
+            menu.addAction(act_resume)
+
+        if status == "error":
+            act_retry = QAction("重试", self)
+            act_retry.triggered.connect(lambda: self.task_action_requested.emit("retry", task_id))
+            menu.addAction(act_retry)
+
+        if status in ("active", "paused", "waiting"):
+            act_cancel = QAction("取消任务", self)
+            act_cancel.triggered.connect(lambda: self.task_action_requested.emit("cancel", task_id))
+            menu.addAction(act_cancel)
+
+        if status in ("complete", "error", "removed"):
+            act_remove = QAction("移除记录", self)
+            act_remove.triggered.connect(lambda: self._remove_task(task_id))
+            menu.addAction(act_remove)
+
+        if not menu.isEmpty():
+            menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def reset_task_for_retry(self, task_id: int):
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+        task["status"] = "waiting"
+        task["progress"] = 0
+        task["speed"] = 0
+        task["gid"] = ""
+        task["finish_time"] = ""
+        task["error_message"] = ""
+        task["last_active_time"] = 0.0
+        self._refresh_row(task_id)
+
+    def _remove_task(self, task_id: int):
+        if task_id in self._tasks:
+            del self._tasks[task_id]
+        self._rebuild_table()
+        self._update_button_states()
+
+    def remove_task_by_id(self, task_id: int):
+        self._remove_task(task_id)
 
     def _on_clear_finished(self):
         self.clear_finished()
@@ -317,29 +395,41 @@ class DownloadProgressWidget(QWidget):
             self.table.setItem(row, 4, speed_item)
         speed_item.setText(speed_text)
 
+        eta_text = ""
+        if task["speed"] > 0 and task["size"] > 0:
+            remaining_bytes = task["size"] - task["completed_length"]
+            if remaining_bytes > 0:
+                eta_text = format_eta(int(remaining_bytes / task["speed"]))
+        eta_item = self.table.item(row, 5)
+        if eta_item is None:
+            eta_item = QTableWidgetItem()
+            eta_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 5, eta_item)
+        eta_item.setText(eta_text)
+
         status_text = _STATUS_TEXT.get(task["status"], task["status"])
         if task["status"] == "error" and task.get("error_message"):
             status_text += f" ({task['error_message']})"
-        status_item = self.table.item(row, 5)
+        status_item = self.table.item(row, 6)
         if status_item is None:
             status_item = QTableWidgetItem()
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 5, status_item)
+            self.table.setItem(row, 6, status_item)
         status_item.setText(status_text)
         status_item.setData(Qt.ItemDataRole.UserRole, _STATUS_ORDER.get(status_text, 99))
 
-        add_item = self.table.item(row, 6)
+        add_item = self.table.item(row, 7)
         if add_item is None:
             add_item = QTableWidgetItem()
             add_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 6, add_item)
+            self.table.setItem(row, 7, add_item)
         add_item.setText(task["add_time"])
 
-        finish_item = self.table.item(row, 7)
+        finish_item = self.table.item(row, 8)
         if finish_item is None:
             finish_item = QTableWidgetItem()
             finish_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(row, 7, finish_item)
+            self.table.setItem(row, 8, finish_item)
         finish_item.setText(task["finish_time"])
 
         self.table.setRowHeight(row, 28)
@@ -349,18 +439,21 @@ class DownloadProgressWidget(QWidget):
         if status == "complete":
             return """
                 QProgressBar { border: 1px solid #c8e6c9; border-radius: 4px;
-                    background: #e8f5e9; height: 20px; text-align: center; }
+                    background: #e8f5e9; height: 20px; text-align: center;
+                    color: #2c3e50; font-weight: bold; }
                 QProgressBar::chunk { background: #4caf50; border-radius: 3px; }
             """
         if status == "error":
             return """
                 QProgressBar { border: 1px solid #ffcdd2; border-radius: 4px;
-                    background: #ffebee; height: 20px; text-align: center; }
+                    background: #ffebee; height: 20px; text-align: center;
+                    color: #2c3e50; font-weight: bold; }
                 QProgressBar::chunk { background: #f44336; border-radius: 3px; }
             """
         return """
             QProgressBar { border: 1px solid #d0d7de; border-radius: 4px;
-                background: #e8eef5; height: 20px; text-align: center; }
+                background: #e8eef5; height: 20px; text-align: center;
+                color: #2c3e50; font-weight: bold; }
             QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                 stop:0 #1a73e8, stop:1 #4fc3f7); border-radius: 3px; }
         """

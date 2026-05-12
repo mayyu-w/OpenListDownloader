@@ -109,6 +109,12 @@ class Aria2RPC:
         results = self._call("aria2.tellStopped", [offset, count, keys])
         return [self._parse_status(r) for r in results]
 
+    def pause_download(self, gid: str):
+        self._call("aria2.pause", [gid])
+
+    def resume_download(self, gid: str):
+        self._call("aria2.unpause", [gid])
+
     def pause_all(self):
         self._call("aria2.pauseAll")
 

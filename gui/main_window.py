@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QMessageBox, QSplitter, QProgressBar,
     QScrollArea, QSizePolicy, QMenuBar, QProgressDialog,
     QCheckBox, QSpinBox, QDialog, QPlainTextEdit, QDialogButtonBox,
+    QSystemTrayIcon, QMenu,
 )
 from PyQt6.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal, QCoreApplication
 from PyQt6.QtGui import QIcon, QAction
@@ -20,11 +21,13 @@ from gui.file_list_widget import FileListWidget
 from gui.aria2_widget import Aria2Widget
 from gui.download_progress_widget import DownloadProgressWidget
 from gui.about_dialog import AboutDialog
-from gui.styles import NoMenuLineEdit, NoMenuPlainTextEdit
+from gui.settings_dialog import SettingsDialog
+from gui.styles import NoMenuLineEdit, NoMenuPlainTextEdit, DARK_THEME, LIGHT_THEME
 from utils.format import format_file_size
 from utils.logger import logger
 from version import __version__
 import os
+import time
 
 
 class DownloadWorker(QThread):
@@ -172,9 +175,14 @@ class MainWindow(QMainWindow):
         self._rpc: Aria2RPC = None
         self._poll_worker: PollWorker = None
         self._preview_worker: PreviewWorker = None
+        self._notified_finished = False
+        self._dark_mode = False
+        self._close_to_tray = True
 
         self._setup_ui()
         self._setup_menu()
+        self._setup_tray()
+        self._load_settings()
 
     def _setup_ui(self):
         central = QWidget()
@@ -268,6 +276,7 @@ class MainWindow(QMainWindow):
         self.download_progress_widget.pause_all_requested.connect(self._on_pause_all)
         self.download_progress_widget.resume_all_requested.connect(self._on_resume_all)
         self.download_progress_widget.delete_all_requested.connect(self._on_delete_all)
+        self.download_progress_widget.task_action_requested.connect(self._on_task_action)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
         right_splitter.addWidget(self.file_list_widget)
@@ -570,7 +579,7 @@ class MainWindow(QMainWindow):
         self.download_progress_widget.table.setSortingEnabled(False)
         file_tasks = []
         for idx, fi in enumerate(selected):
-            task_id = self.download_progress_widget.add_task(fi.name, fi.size)
+            task_id = self.download_progress_widget.add_task(fi.name, fi.size, fi.path)
             file_tasks.append((task_id, fi))
             if idx % 50 == 0:
                 self._progress_dialog.setLabelText(f"正在创建任务列表 ({idx}/{total})...")
@@ -608,6 +617,7 @@ class MainWindow(QMainWindow):
             self._progress_dialog.setValue(current)
 
     def _on_download_finished(self):
+        self._notified_finished = False
         if self._progress_dialog:
             self._progress_dialog.close()
             self._progress_dialog = None
@@ -658,10 +668,169 @@ class MainWindow(QMainWindow):
         self._poll_timer.stop()
         self.download_progress_widget.clear_all()
         self.status_bar.showMessage("所有下载任务已删除")
+        self._notified_finished = False
+
+    def _on_task_action(self, action: str, task_id: int):
+        task = self.download_progress_widget._tasks.get(task_id)
+        if not task:
+            return
+
+        if action == "pause":
+            if self._rpc and task["gid"]:
+                try:
+                    self._rpc.pause_download(task["gid"])
+                    task["status"] = "paused"
+                    self.download_progress_widget._refresh_row(task_id)
+                    self.download_progress_widget._update_button_states()
+                    self.status_bar.showMessage(f"已暂停: {task['filename']}")
+                except Exception as e:
+                    self.status_bar.showMessage(f"暂停失败: {e}")
+
+        elif action == "resume":
+            if self._rpc and task["gid"]:
+                try:
+                    self._rpc.resume_download(task["gid"])
+                    task["status"] = "active"
+                    task["last_active_time"] = time.time()
+                    self.download_progress_widget._refresh_row(task_id)
+                    self.download_progress_widget._update_button_states()
+                    self.status_bar.showMessage(f"已继续: {task['filename']}")
+                    if not self._poll_timer.isActive():
+                        self._poll_timer.start(2000)
+                except Exception as e:
+                    self.status_bar.showMessage(f"继续失败: {e}")
+
+        elif action == "retry":
+            self._retry_task(task_id)
+
+        elif action == "cancel":
+            if self._rpc and task["gid"]:
+                try:
+                    self._rpc.force_remove_download(task["gid"])
+                except Exception:
+                    pass
+            self.download_progress_widget.remove_task_by_id(task_id)
+            self.status_bar.showMessage(f"已取消: {task['filename']}")
+
+    def _retry_task(self, task_id: int):
+        task = self.download_progress_widget._tasks.get(task_id)
+        if not task:
+            return
+        if not self._rpc:
+            self.status_bar.showMessage("aria2 未连接，无法重试")
+            return
+
+        self.download_progress_widget.reset_task_for_retry(task_id)
+        self.status_bar.showMessage(f"正在重试: {task['filename']}")
+
+        rpc_config = self.aria2_widget.get_rpc_config()
+        auth_header = self.token_manager.auth_header if self.token_manager.auth_header else None
+
+        class _RetryWorker(QThread):
+            done = pyqtSignal(int, str)
+            fail = pyqtSignal(int, str)
+
+            def __init__(self, client, rpc, file_path, filename, save_dir, auth_header, tid):
+                super().__init__()
+                self._client = client
+                self._rpc = rpc
+                self._file_path = file_path
+                self._filename = filename
+                self._save_dir = save_dir
+                self._auth_header = auth_header
+                self._tid = tid
+
+            def run(self):
+                try:
+                    info = self._client.get_file_info(self._file_path)
+                    raw_url = info.get("raw_url", "")
+                    if not raw_url:
+                        self.fail.emit(self._tid, "未获取到下载链接")
+                        return
+                    gid = self._rpc.add_download(
+                        url=raw_url,
+                        save_dir=self._save_dir,
+                        filename=self._filename,
+                        headers=self._auth_header,
+                    )
+                    self.done.emit(self._tid, gid)
+                except Exception as e:
+                    self.fail.emit(self._tid, str(e))
+
+        worker = _RetryWorker(
+            self.client, self._rpc, task["path"], task["filename"],
+            rpc_config["save_dir"], auth_header, task_id,
+        )
+        worker.done.connect(lambda tid, gid: (
+            self.download_progress_widget.set_task_gid(tid, gid),
+            self.status_bar.showMessage(f"重试已提交: {self.download_progress_widget._tasks.get(tid, {}).get('filename', '')}"),
+            self._ensure_polling(),
+        ))
+        worker.fail.connect(lambda tid, err: (
+            self.download_progress_widget.set_task_error(tid, err),
+            self.status_bar.showMessage(f"重试失败: {err}"),
+        ))
+        worker.start()
+        self._retry_workers = getattr(self, "_retry_workers", [])
+        self._retry_workers.append(worker)
+
+    def _ensure_polling(self):
+        if not self._poll_timer.isActive():
+            self._poll_timer.start(2000)
+
+    def _setup_tray(self):
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon.ico")
+        icon = QIcon(icon_path) if os.path.isfile(icon_path) else QIcon()
+        self._tray = QSystemTrayIcon(icon, self)
+        tray_menu = QMenu(self)
+
+        act_show = QAction("显示主窗口", self)
+        act_show.triggered.connect(self._show_and_activate)
+        tray_menu.addAction(act_show)
+
+        tray_menu.addSeparator()
+
+        act_quit = QAction("退出", self)
+        act_quit.triggered.connect(lambda: self._do_quit())
+        tray_menu.addAction(act_quit)
+
+        self._tray.setContextMenu(tray_menu)
+        self._tray.activated.connect(self._on_tray_activated)
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._show_and_activate()
+
+    def _show_and_activate(self):
+        self.showNormal()
+        self.activateWindow()
+
+    def _show_download_complete_notification(self):
+        if self._notified_finished:
+            return
+        self._notified_finished = True
+        self._tray.show()
+        self._tray.showMessage(
+            "下载完成",
+            "所有下载任务已完成",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
 
     def _setup_menu(self):
         menu_bar = QMenuBar(self)
         self.setMenuBar(menu_bar)
+
+        view_menu = menu_bar.addMenu("视图")
+        self._theme_action = QAction("暗色主题", self)
+        self._theme_action.setCheckable(True)
+        self._theme_action.triggered.connect(self._toggle_theme)
+        view_menu.addAction(self._theme_action)
+
+        settings_menu = menu_bar.addMenu("设置")
+        act_settings = QAction("首选项", self)
+        act_settings.triggered.connect(self._on_settings)
+        settings_menu.addAction(act_settings)
 
         help_menu = menu_bar.addMenu("帮助")
 
@@ -694,7 +863,50 @@ class MainWindow(QMainWindow):
         dlg = AboutDialog(self)
         dlg.exec()
 
+    def _toggle_theme(self, checked: bool):
+        self._dark_mode = checked
+        app = QCoreApplication.instance()
+        if app:
+            app.setStyleSheet(DARK_THEME if checked else LIGHT_THEME)
+        from utils.config_manager import save_settings
+        save_settings(dark_mode=checked)
+
+    def _on_settings(self):
+        dlg = SettingsDialog({
+            "dark_mode": self._dark_mode,
+            "close_to_tray": self._close_to_tray,
+        }, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_settings = dlg.get_settings()
+        self._dark_mode = new_settings["dark_mode"]
+        self._close_to_tray = new_settings["close_to_tray"]
+        self._theme_action.setChecked(self._dark_mode)
+        app = QCoreApplication.instance()
+        if app:
+            app.setStyleSheet(DARK_THEME if self._dark_mode else LIGHT_THEME)
+        from utils.config_manager import save_settings
+        save_settings(**new_settings)
+
+    def _load_settings(self):
+        from utils.config_manager import load_settings
+        s = load_settings()
+        self._dark_mode = s.get("dark_mode", False)
+        self._close_to_tray = s.get("close_to_tray", True)
+        self._theme_action.setChecked(self._dark_mode)
+        app = QCoreApplication.instance()
+        if app and self._dark_mode:
+            app.setStyleSheet(DARK_THEME)
+
     def closeEvent(self, event):
+        if self._close_to_tray and QSystemTrayIcon.isSystemTrayAvailable():
+            self.hide()
+            self._tray.show()
+            event.ignore()
+            return
+        self._do_quit(event)
+
+    def _do_quit(self, event=None):
         self._poll_timer.stop()
         if self._download_worker and self._download_worker.isRunning():
             self._download_worker.wait(5000)
@@ -704,7 +916,11 @@ class MainWindow(QMainWindow):
             self.scanner.cancel()
             self.scanner.wait(3000)
         self.aria2_widget.force_cleanup()
-        event.accept()
+        self._tray.hide()
+        if event:
+            event.accept()
+        else:
+            QCoreApplication.quit()
 
     def _on_aria2_running_changed(self, running: bool):
         self.file_list_widget.open_dir_btn.setEnabled(running)
@@ -741,6 +957,7 @@ class MainWindow(QMainWindow):
         if self.download_progress_widget.all_finished():
             self._poll_timer.stop()
             self.status_bar.showMessage("所有下载任务已完成")
+            self._show_download_complete_notification()
             return
 
         if self._poll_worker and self._poll_worker.isRunning():
@@ -757,3 +974,4 @@ class MainWindow(QMainWindow):
         if self.download_progress_widget.all_finished():
             self._poll_timer.stop()
             self.status_bar.showMessage("所有下载任务已完成")
+            self._show_download_complete_notification()
